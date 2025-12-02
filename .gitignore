@@ -6,7 +6,6 @@ __pycache__/
 *.ipynb
 
 # Jupyter Notebook
-.ipynb_checkpoints/
 # 模型文件（太大，不适合上传到 GitHub）
 checkpoints/
 *.pth
