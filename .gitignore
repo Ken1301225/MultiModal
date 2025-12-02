@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+*.ipynb
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+# 模型文件（太大，不适合上传到 GitHub）
+checkpoints/
+*.pth
+*.safetensors
+*.bin
+model/
+resnet-cats-dogs*/
+wav2vec2-cats-dogs*/
+
+# TensorBoard 日志（可选，看你是否需要）
+logs/
+img/
+# 数据集（通常不上传）
+dataset/
+*.wav
+*.mp3
+*.jpg
+*.png
+*.jpeg
+
+# 系统文件
+.DS_Store
+*.swp
+*.swo
