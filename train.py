@@ -24,6 +24,8 @@ from model import (
     HumanLikeMultimodalModel,
     print_trainable_parameters,
     MultimodalModelDrop,
+    MultiModalAttnModel,
+    MultiModalAttnCLSModel
 )
 from torch.utils.data import DataLoader
 import torch.optim as optim
@@ -42,22 +44,22 @@ def set_seed(seed: int = 42):
         torch.cuda.manual_seed_all(seed)
 
 
-log_dir = "/home/amax/dakai/neuron/logs/drop_7"  # 日志存储路径
+log_dir = "./logs/attn_1"  # 日志存储路径
 writer = SummaryWriter(log_dir=log_dir)
 
 set_seed(42)
 
-img_model_path = "/home/amax/dakai/neuron/resnet-cats-dogs3/checkpoint-9225"
+img_model_path = "./resnet-cats-dogs3/checkpoint-4100"
 img_model_best = AutoModelForImageClassification.from_pretrained(img_model_path)
 
 
-device = "cuda"
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
-audio_best_path = "/home/amax/dakai/neuron/wav2vec2-cats-dogs/checkpoint-525"
+audio_best_path = "./wav2vec2-cats-dogs/checkpoint-525"
 audio_model_best = AutoModelForAudioClassification.from_pretrained(audio_best_path)
 
 
-audio_data_dir = "/home/amax/dakai/dataset/dc_w/DvC"
+audio_data_dir = "E:/NeuralScience/project/DvC"
 
 audio_dataset, label2id_audio = load_local_audio_dataset_dir(audio_data_dir)
 id2label_audio = {i: label for label, i in label2id_audio.items()}
@@ -79,7 +81,7 @@ audio_val_ds = audio_val_ds.map(
 )
 
 
-cache_dir = "/home/amax/dakai/dataset/microsoft"
+cache_dir = "E:/NeuralScience/project/img_dataset"
 img_dataset = load_dataset("microsoft/cats_vs_dogs", cache_dir=cache_dir)
 print(img_dataset)
 img_dataset_split = img_dataset["train"].train_test_split(0.3, 0.7, seed=42)
@@ -118,15 +120,35 @@ print(f"标签映射: {label2id}")
 
 
 # multimodal_model = HumanLikeMultimodalModel(img_model_best, audio_model_best).to(device)
-multimodal_model = MultimodalModelDrop(
+# multimodal_model = MultimodalModelDrop(
+#     img_model_best,
+#     audio_model_best,
+#     shared_dim=512,
+#     num_classes=2,
+#     vision_drop_prob=0.5,  # 20% 概率整路屏蔽视觉
+#     audio_drop_prob=0.5,  # 20% 概率整路屏蔽音频
+#     emb_mask_prob=0.7,  # 每个 embedding 维度 10% 概率置零
+# ).to(device)
+multimodal_model = MultiModalAttnCLSModel(
     img_model_best,
     audio_model_best,
     shared_dim=512,
     num_classes=2,
-    vision_drop_prob=0.5,  # 20% 概率整路屏蔽视觉
-    audio_drop_prob=0.5,  # 20% 概率整路屏蔽音频
-    emb_mask_prob=0.7,  # 每个 embedding 维度 10% 概率置零
+    attn_heads=8,
+    attn_dropout=0.4,
+    vision_drop_prob=0.3,
+    audio_drop_prob=0.3,
 ).to(device)
+# multimodal_model = MultiModalAttnCLSModel(
+#     img_model_best,
+#     audio_model_best,
+#     shared_dim=512,
+#     num_classes=2,
+#     attn_heads=8,
+#     attn_dropout=0.4,
+#     vision_drop_prob=0.3,
+#     audio_drop_prob=0.3,
+# )
 multi_train_ds = RandomPairedDataset(img_train_ds, audio_train_ds)
 multi_val_ds = RandomPairedDataset(img_val_ds, audio_val_ds)
 
@@ -142,7 +164,7 @@ print("开始多模态协同训练...")
 best_val_acc = 0.0
 best_val_loss = np.inf
 save_path = (
-    "/home/amax/dakai/neuron/checkpoints/9225_525/drop/multimodal_drop_model_best7.pth"
+    "./checkpoints/4100_525/attn/multimodal_attn_model_best1.pth"
 )
 
 # print_trainable_parameters(multimodal_model)

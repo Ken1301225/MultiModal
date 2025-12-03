@@ -14,6 +14,7 @@ checkpoints/
 model/
 resnet-cats-dogs*/
 wav2vec2-cats-dogs*/
+cache_dir/
 
 # TensorBoard 日志（可选，看你是否需要）
 logs/

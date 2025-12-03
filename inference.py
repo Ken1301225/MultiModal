@@ -291,7 +291,7 @@ if __name__ == "__main__":
         img_data_dir, audio_data_dir, _train_transforms, feature_extractor
     )
 
-    device = "cuda"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     img_model_path = "/home/amax/dakai/neuron/resnet-cats-dogs2/checkpoint-4100"
     img_model_best = AutoModelForImageClassification.from_pretrained(img_model_path)
     audio_best_path = "/home/amax/dakai/neuron/wav2vec2-cats-dogs/checkpoint-525"
