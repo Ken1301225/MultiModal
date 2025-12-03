@@ -24,6 +24,8 @@ from model import (
     HumanLikeMultimodalModel,
     print_trainable_parameters,
     MultimodalModelDrop,
+    MultiModalAttnCLSModel,
+    MultiModalAttnModel,
 )
 from torch.utils.data import DataLoader
 import torch.optim as optim
@@ -42,12 +44,12 @@ def set_seed(seed: int = 42):
         torch.cuda.manual_seed_all(seed)
 
 
-log_dir = "/home/amax/dakai/neuron/logs/drop_7"  # 日志存储路径
+log_dir = "/home/amax/dakai/neuron/logs/drop_9"  # 日志存储路径
 writer = SummaryWriter(log_dir=log_dir)
 
 set_seed(42)
 
-img_model_path = "/home/amax/dakai/neuron/resnet-cats-dogs3/checkpoint-9225"
+img_model_path = "/home/amax/dakai/neuron/resnet-cats-dogs2/checkpoint-4100"
 img_model_best = AutoModelForImageClassification.from_pretrained(img_model_path)
 
 
@@ -118,14 +120,17 @@ print(f"标签映射: {label2id}")
 
 
 # multimodal_model = HumanLikeMultimodalModel(img_model_best, audio_model_best).to(device)
-multimodal_model = MultimodalModelDrop(
-    img_model_best,
-    audio_model_best,
-    shared_dim=512,
-    num_classes=2,
-    vision_drop_prob=0.5,  # 20% 概率整路屏蔽视觉
-    audio_drop_prob=0.5,  # 20% 概率整路屏蔽音频
-    emb_mask_prob=0.7,  # 每个 embedding 维度 10% 概率置零
+# multimodal_model = MultimodalModelDrop(
+#     img_model_best,
+#     audio_model_best,
+#     shared_dim=512,
+#     num_classes=2,
+#     vision_drop_prob=0.5,
+#     audio_drop_prob=0.5,
+#     emb_mask_prob=0.7,
+# ).to(device)
+multimodal_model = MultiModalAttnModel(
+    img_model_best, audio_model_best, vision_drop_prob=0.5, audio_drop_prob=0.5
 ).to(device)
 multi_train_ds = RandomPairedDataset(img_train_ds, audio_train_ds)
 multi_val_ds = RandomPairedDataset(img_val_ds, audio_val_ds)
@@ -141,9 +146,7 @@ print("开始多模态协同训练...")
 
 best_val_acc = 0.0
 best_val_loss = np.inf
-save_path = (
-    "/home/amax/dakai/neuron/checkpoints/9225_525/drop/multimodal_drop_model_best7.pth"
-)
+save_path = "/home/amax/dakai/neuron/checkpoints/4100_525/drop/multimodal_attn_drop_model_best9.pth"
 
 # print_trainable_parameters(multimodal_model)
 
@@ -217,5 +220,5 @@ for epoch in range(10):
         torch.save(multimodal_model.state_dict(), save_path)
         print(f"  >>> 新的最佳模型已保存 (Acc: {best_val_loss:.4f})")
 
-print(f"\n训练结束! 最佳验证集准确率: {best_val_acc:.4f}")
+print(f"\n训练结束! 最佳验证集准确率: {best_val_loss:.4f}")
 writer.close()

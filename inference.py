@@ -11,7 +11,12 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "5"
 os.environ["NCCL_P2P_DISABLE"] = "1"
 os.environ["NCCL_IB_DISABLE"] = "1"
 
-from model import HumanLikeMultimodalModel, MultimodalModelDrop
+from model import (
+    HumanLikeMultimodalModel,
+    MultimodalModelDrop,
+    MultiModalAttnCLSModel,
+    MultiModalAttnModel,
+)
 
 
 def inference(
@@ -241,6 +246,7 @@ def plot_sigmoid(x, y, label, color):
         )
 
         print(f"[{label}] Logistic 拟合: x0(PSE)={x0_fit:.4f}, k(slope)={k_fit:.4f}")
+        return x0_fit, k_fit
 
     except Exception as e:
         print(f"Logistic 拟合失败（{label}）：{e}，退回散点。")
@@ -297,6 +303,7 @@ if __name__ == "__main__":
     audio_best_path = "/home/amax/dakai/neuron/wav2vec2-cats-dogs/checkpoint-525"
     audio_model_best = AutoModelForAudioClassification.from_pretrained(audio_best_path)
     save_path = "/home/amax/dakai/neuron/checkpoints/4100_525/drop/multimodal_drop_model_best5.pth"
+    # save_path = "/home/amax/dakai/neuron/checkpoints/4100_525/drop/multimodal_attn_drop_model_best8.pth"
 
     img_model_best.to(device)
     audio_model_best.to(device)
@@ -304,6 +311,7 @@ if __name__ == "__main__":
     #     device
     # )
     inference_model = MultimodalModelDrop(img_model_best, audio_model_best).to(device)
+    # inference_model = MultiModalAttnModel(img_model_best, audio_model_best).to(device)
 
     inference_model.load_state_dict(torch.load(save_path, map_location=device))
     inference_model.eval()
@@ -348,17 +356,36 @@ if __name__ == "__main__":
 
     plt.figure(figsize=(10, 6))
 
-    plot_sigmoid(ratio_x, p_mix_1, "mix", "tab:blue")
-    plot_sigmoid(ratio_x, p_img_1, "image", "tab:orange")
-    plot_sigmoid(ratio_x, p_audio_1, "audio", "tab:green")
-    plot_sigmoid(ratio_x, p_baseline_1, "baseline", "tab:red")
+    # 获取拟合参数
+    _, k_mix = plot_sigmoid(ratio_x, p_mix_1, "mix", "tab:blue")
+    _, k_img = plot_sigmoid(ratio_x, p_img_1, "image", "tab:orange")
+    _, k_audio = plot_sigmoid(ratio_x, p_audio_1, "audio", "tab:green")
+    _, k_baseline = plot_sigmoid(
+        ratio_x, p_baseline_1, "baseline (Bayes Logit)", "tab:red"
+    )
 
-    plt.xlabel("dog ratio")  # 横坐标改成比例含义
+    # === 验证贝叶斯最优整合 ===
+    if k_img is not None and k_audio is not None and k_mix is not None:
+        # 计算理论上的贝叶斯最优斜率
+        k_optimal = np.sqrt(k_img**2 + k_audio**2)
+
+        print("\n========== 贝叶斯整合验证 ==========")
+        print(f"Image Slope (k_v): {k_img:.4f}")
+        print(f"Audio Slope (k_a): {k_audio:.4f}")
+        print(f"Actual Mix Slope : {k_mix:.4f}")
+        print(f"Baseline Slope : {k_baseline:.4f}")
+        print(f"Optimal Bayes Slope (sqrt(kv^2 + ka^2)): {k_optimal:.4f}")
+
+        diff = abs(k_mix - k_optimal) / k_optimal * 100
+        print(f"偏差: {diff:.2f}%")
+
+    plt.xlabel("dog ratio")
     plt.ylabel("Proportion dog choice")
     plt.grid(True, linestyle="--", alpha=0.4)
+    plt.xticks(np.arange(0, 1.1, 0.1))  # 从 0 到 1，每 0.1 为一个刻度
     plt.legend()
 
     plt.tight_layout()
     plt.savefig(
-        "/home/amax/dakai/neuron/img/drop/drop_m5_v05a05e07_wav_baseline.png", dpi=300
+        "/home/amax/dakai/neuron/img/drop/drop_m5_v05a05e07_wav_baseline3.png", dpi=300
     )
