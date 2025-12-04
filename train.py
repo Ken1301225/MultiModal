@@ -54,6 +54,7 @@ cfg = Config(
     lr=1e-5,
     epoch=20,
     model="MultimodalModelDrop",
+    base_ckpt_dir="/home/amax/dakai/neuron/checkpoints",
     img_model_path="/home/amax/dakai/neuron/resnet-cats-dogs2/checkpoint-4100",
     audio_best_path="/home/amax/dakai/neuron/wav2vec2-cats-dogs/checkpoint-525",
     model_params={
