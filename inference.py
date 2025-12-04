@@ -1,3 +1,4 @@
+import json
 import os
 import random
 import numpy as np
@@ -277,8 +278,14 @@ if __name__ == "__main__":
         get_transforms,
     )
     import matplotlib.pyplot as plt
+    from config import Config
 
-    set_seed(42)
+    cfg = Config.read_json(
+        json_path="/home/amax/dakai/neuron/checkpoints/Drop_lr1e-04_bs16_mask0.7_v0.5_a0.5_1204_0954/config.json",
+        eval_mode=True,
+    )
+
+    set_seed(cfg.seed)
 
     img_model_cache = "/home/amax/.cache/huggingface/hub/models--microsoft--resnet-50/snapshots/34c2154c194f829b11125337b98c8f5f9965ff19"
     image_processor = AutoImageProcessor.from_pretrained(img_model_cache, use_fast=True)
@@ -297,21 +304,60 @@ if __name__ == "__main__":
         img_data_dir, audio_data_dir, _train_transforms, feature_extractor
     )
 
-    device = "cuda"
-    img_model_path = "/home/amax/dakai/neuron/resnet-cats-dogs2/checkpoint-4100"
-    img_model_best = AutoModelForImageClassification.from_pretrained(img_model_path)
-    audio_best_path = "/home/amax/dakai/neuron/wav2vec2-cats-dogs/checkpoint-525"
-    audio_model_best = AutoModelForAudioClassification.from_pretrained(audio_best_path)
-    save_path = "/home/amax/dakai/neuron/checkpoints/4100_525/drop/multimodal_drop_model_best5.pth"
-    # save_path = "/home/amax/dakai/neuron/checkpoints/4100_525/drop/multimodal_attn_drop_model_best8.pth"
+    device = cfg.device
+    img_model_best = AutoModelForImageClassification.from_pretrained(cfg.img_model_path)
+    audio_model_best = AutoModelForAudioClassification.from_pretrained(
+        cfg.audio_best_path
+    )
+    save_path = cfg.save_path
 
     img_model_best.to(device)
     audio_model_best.to(device)
-    # inference_model = HumanLikeMultimodalModel(img_model_best, audio_model_best).to(
-    #     device
-    # )
-    inference_model = MultimodalModelDrop(img_model_best, audio_model_best).to(device)
-    # inference_model = MultiModalAttnModel(img_model_best, audio_model_best).to(device)
+
+    mp = cfg.model_params
+
+    match cfg.model_type:
+        case "HumanLikeMultimodalModel":
+            inference_model = HumanLikeMultimodalModel(
+                img_model_best,
+                audio_model_best,
+                shared_dim=mp["shared_dim"],
+                num_classes=mp["num_classes"],
+            ).to(device)
+        case "MultimodalModelDrop":
+            inference_model = MultimodalModelDrop(
+                img_model_best,
+                audio_model_best,
+                shared_dim=mp["shared_dim"],
+                num_classes=mp["num_classes"],
+                vision_drop_prob=mp["vision_drop_prob"],
+                audio_drop_prob=mp["audio_drop_prob"],
+                emb_mask_prob=mp["emb_mask_prob"],
+            ).to(device)
+        case "MultiModalAttnModel":
+            inference_model = MultiModalAttnModel(
+                img_model_best,
+                audio_model_best,
+                shared_dim=mp["shared_dim"],
+                num_classes=mp["num_classes"],
+                attn_heads=mp["attn_heads"],
+                attn_dropout=mp["attn_dropout"],
+                vision_drop_prob=mp["vision_drop_prob"],
+                audio_drop_prob=mp["audio_drop_prob"],
+            ).to(device)
+        case "MultiModalAttnCLSModel":
+            inference_model = MultiModalAttnCLSModel(
+                img_model_best,
+                audio_model_best,
+                shared_dim=mp["shared_dim"],
+                num_classes=mp["num_classes"],
+                attn_heads=mp["attn_heads"],
+                attn_dropout=mp["attn_dropout"],
+                vision_drop_prob=mp["vision_drop_prob"],
+                audio_drop_prob=mp["audio_drop_prob"],
+            ).to(device)
+        case _:
+            raise ValueError(f"未知的多模态模型类型: {cfg.model_type}")
 
     inference_model.load_state_dict(torch.load(save_path, map_location=device))
     inference_model.eval()
@@ -378,6 +424,18 @@ if __name__ == "__main__":
 
         diff = abs(k_mix - k_optimal) / k_optimal * 100
         print(f"偏差: {diff:.2f}%")
+        bayes_path = os.path.join(cfg.ckpt_dir, "bayes.json")
+        with open(bayes_path, "w", encoding="utf-8") as f:
+            # 将对象转为字典保存，过滤掉方法
+            config_dict = {
+                "Image Slope (k_v)": f"{k_img:.4f}",
+                "Audio Slope (k_a)": f"{k_audio:.4f}",
+                "Actual Mix Slope": f"{k_mix:.4f}",
+                "Baseline Slope": f"{k_baseline:.4f}",
+                "Optimal Bayes Slope (sqrt(kv^2 + ka^2))": f"{k_optimal:.4f}",
+                "偏差": f"{diff:.2f}%",
+            }
+            json.dump(config_dict, f, indent=4, ensure_ascii=False)
 
     plt.xlabel("dog ratio")
     plt.ylabel("Proportion dog choice")
@@ -386,6 +444,5 @@ if __name__ == "__main__":
     plt.legend()
 
     plt.tight_layout()
-    plt.savefig(
-        "/home/amax/dakai/neuron/img/drop/drop_m5_v05a05e07_wav_baseline3.png", dpi=300
-    )
+    img_save = os.path.join(cfg.ckpt_dir, "result.png")
+    plt.savefig(img_save, dpi=300)
