@@ -280,16 +280,16 @@ if __name__ == "__main__":
 
     set_seed(42)
 
-    img_model_cache = "/home/amax/.cache/huggingface/hub/models--microsoft--resnet-50/snapshots/34c2154c194f829b11125337b98c8f5f9965ff19"
+    img_model_cache = "/home/tomoon/.cache/huggingface/hub/models--microsoft--resnet-50/snapshots/34c2154c194f829b11125337b98c8f5f9965ff19"
     image_processor = AutoImageProcessor.from_pretrained(img_model_cache, use_fast=True)
 
-    audio_model_cache = "/home/amax/dakai/neuron/model/facebook/models--facebook--wav2vec2-base/snapshots/0b5b8e868dd84f03fd87d01f9c4ff0f080fecfe8"
+    audio_model_cache = "/home/tomoon/codes/lecture_project/Neural Science/models/wav2vec2-base/models--facebook--wav2vec2-base/snapshots/0b5b8e868dd84f03fd87d01f9c4ff0f080fecfe8"
     feature_extractor = AutoFeatureExtractor.from_pretrained(
         audio_model_cache, use_fast=True
     )
 
-    audio_data_dir = "/home/amax/dakai/dataset/mix_wavset/mix_test_set"
-    img_data_dir = "/home/amax/dakai/dataset/mix_imgset/mixed_cats_dogs_img"
+    audio_data_dir = "/home/tomoon/datasets/dog_cat_audio_cf/dog_cat_wav/mix_test_set"
+    img_data_dir = "/home/tomoon/datasets/dog_cat_img_cf/mixed_data1/mixed_cats_dogs_img"
 
     _train_transforms, _val_transforms = get_transforms()
 
@@ -297,12 +297,12 @@ if __name__ == "__main__":
         img_data_dir, audio_data_dir, _train_transforms, feature_extractor
     )
 
-    device = "cuda"
-    img_model_path = "/home/amax/dakai/neuron/resnet-cats-dogs2/checkpoint-4100"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    img_model_path = "/home/tomoon/codes/lecture_project/Neural Science/models/resnet-cats-dogs3/checkpoint-4100"
     img_model_best = AutoModelForImageClassification.from_pretrained(img_model_path)
-    audio_best_path = "/home/amax/dakai/neuron/wav2vec2-cats-dogs/checkpoint-525"
+    audio_best_path = "/home/tomoon/codes/lecture_project/Neural Science/models/wav2vec2-cats-dogs/checkpoint-525"
     audio_model_best = AutoModelForAudioClassification.from_pretrained(audio_best_path)
-    save_path = "/home/amax/dakai/neuron/checkpoints/4100_525/drop/multimodal_drop_model_best5.pth"
+    save_path = "./checkpoints/4100_525/attn/multimodal_attn_model_best6.pth"
     # save_path = "/home/amax/dakai/neuron/checkpoints/4100_525/drop/multimodal_attn_drop_model_best8.pth"
 
     img_model_best.to(device)
@@ -310,8 +310,9 @@ if __name__ == "__main__":
     # inference_model = HumanLikeMultimodalModel(img_model_best, audio_model_best).to(
     #     device
     # )
-    inference_model = MultimodalModelDrop(img_model_best, audio_model_best).to(device)
-    # inference_model = MultiModalAttnModel(img_model_best, audio_model_best).to(device)
+    # inference_model = MultimodalModelDrop(img_model_best, audio_model_best).to(device)
+    # inference_model = MultiModalAttnModel(img_model_best, audio_model_best, shared_dim=1024, attn_heads=16).to(device)
+    inference_model = MultiModalAttnCLSModel(img_model_best, audio_model_best, shared_dim=1024, attn_heads=16).to(device)
 
     inference_model.load_state_dict(torch.load(save_path, map_location=device))
     inference_model.eval()
@@ -387,5 +388,5 @@ if __name__ == "__main__":
 
     plt.tight_layout()
     plt.savefig(
-        "/home/amax/dakai/neuron/img/drop/drop_m5_v05a05e07_wav_baseline3.png", dpi=300
+        "./img/attn/multimodal_attn_model_best6.png", dpi=300
     )

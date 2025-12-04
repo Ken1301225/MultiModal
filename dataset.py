@@ -122,7 +122,7 @@ def load_local_audio_dataset_dir(data_dir):
 def preprocess_function(examples):
     # audio_model_name = "facebook/wav2vec2-base"
     # cache_dir = "/home/amax/dakai/neuron/model/facebook"
-    audio_model_cache = "/home/amax/dakai/neuron/model/facebook/models--facebook--wav2vec2-base/snapshots/0b5b8e868dd84f03fd87d01f9c4ff0f080fecfe8"
+    audio_model_cache = "/home/tomoon/codes/lecture_project/Neural Science/models/wav2vec2-base/models--facebook--wav2vec2-base/snapshots/0b5b8e868dd84f03fd87d01f9c4ff0f080fecfe8"
     feature_extractor = AutoFeatureExtractor.from_pretrained(
         audio_model_cache, use_fast=True
     )
@@ -146,7 +146,7 @@ def preprocess_function(examples):
 
 
 def get_transforms():
-    img_model_cache = "/home/amax/.cache/huggingface/hub/models--microsoft--resnet-50/snapshots/34c2154c194f829b11125337b98c8f5f9965ff19"
+    img_model_cache = "/home/tomoon/.cache/huggingface/hub/models--microsoft--resnet-50/snapshots/34c2154c194f829b11125337b98c8f5f9965ff19"
     image_processor = AutoImageProcessor.from_pretrained(img_model_cache, use_fast=True)
 
     normalize = Normalize(
