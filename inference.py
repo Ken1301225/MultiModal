@@ -281,7 +281,7 @@ if __name__ == "__main__":
     from config import Config
 
     cfg = Config.read_json(
-        json_path="/home/amax/dakai/neuron/checkpoints/Drop_lr1e-04_bs16_mask0.7_v0.5_a0.5_1204_0954/config.json",
+        json_path="/home/amax/dakai/neuron/checkpoints/AttnCLS_lr1e-05_bs16_head16_dr0.5_1204_1638/config.json",
         eval_mode=True,
     )
 
@@ -444,5 +444,5 @@ if __name__ == "__main__":
     plt.legend()
 
     plt.tight_layout()
-    img_save = os.path.join(cfg.ckpt_dir, "result.png")
+    img_save = os.path.join(cfg.ckpt_dir, "bayes_result.png")
     plt.savefig(img_save, dpi=300)
