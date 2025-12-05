@@ -1,4 +1,7 @@
 import os
+
+os.environ["HF_DATASETS_OFFLINE"] = "1"
+
 import random
 from torch.utils.tensorboard import SummaryWriter
 import numpy as np
@@ -18,6 +21,7 @@ from transformers import (
     AutoModelForAudioClassification,
     AutoModelForImageClassification,
 )
+from config import Config
 import os
 from datasets import load_dataset
 from model import (
@@ -44,18 +48,18 @@ def set_seed(seed: int = 42):
         torch.cuda.manual_seed_all(seed)
 
 
-log_dir = "./logs/attn_6"  # 日志存储路径
+log_dir = "/home/amax/dakai/neuron/logs/drop_9"  # 日志存储路径
 writer = SummaryWriter(log_dir=log_dir)
 
 set_seed(42)
 
-img_model_path = "/home/tomoon/codes/lecture_project/Neural Science/models/resnet-cats-dogs3/checkpoint-4100"
+img_model_path = "/home/amax/dakai/neuron/resnet-cats-dogs2/checkpoint-4100"
 img_model_best = AutoModelForImageClassification.from_pretrained(img_model_path)
 
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+device = "cuda"
 
-audio_best_path = "/home/tomoon/codes/lecture_project/Neural Science/models/wav2vec2-cats-dogs/checkpoint-525"
+audio_best_path = "/home/amax/dakai/neuron/wav2vec2-cats-dogs/checkpoint-525"
 audio_model_best = AutoModelForAudioClassification.from_pretrained(audio_best_path)
 
 
@@ -118,95 +122,41 @@ id2label = {i: label for i, label in enumerate(labels)}
 print(f"标签列名: {label_col}")
 print(f"标签映射: {label2id}")
 
-# ================= 保存超参数 =================
-hyperpara = {
-    "seed": 42,
-    "batch_size": 16,
-    "lr": 1e-5,
-    "model": "MultiModalAttnCLSModel",
-    "model_params": {
-        "shared_dim": 1024,
-        "num_classes": 2,
-        "attn_heads": 16,
-        "emb_mask_prob": 0.7,
-        "attn_dropout": 0.5,
-        "linear_dropout": 0.2,
-        "vision_drop_prob": 0.4,
-        "audio_drop_prob": 0.4,
-    },
-    "optimizer": "AdamW",
-}
 
-os.makedirs(log_dir, exist_ok=True)
-log_file_path = os.path.join(log_dir, "hyperparameters.log")
-with open(log_file_path, "w") as f:
-    for key, value in hyperpara.items():
-        f.write(f"{key}: {value}\n")
-
-print(f"超参数已保存至: {log_file_path}")
-
-match hyperpara["model"]:
-    case "HumanLikeMultimodalModel":
-        multimodal_model = HumanLikeMultimodalModel(
-            img_model_best, 
-            audio_model_best,
-            shared_dim=hyperpara["model_params"]["shared_dim"],
-            num_classes=hyperpara["model_params"]["num_classes"]
-        ).to(device)
-    case "MultimodalModelDrop":
-        multimodal_model = MultimodalModelDrop(
-            img_model_best,
-            audio_model_best,
-            shared_dim=hyperpara["model_params"]["shared_dim"],
-            num_classes=hyperpara["model_params"]["num_classes"],
-            vision_drop_prob=hyperpara["model_params"]["vision_drop_prob"],
-            audio_drop_prob=hyperpara["model_params"]["audio_drop_prob"],
-            emb_mask_prob=hyperpara["model_params"]["emb_mask_prob"],
-        ).to(device)
-    case "MultiModalAttnModel":
-        multimodal_model = MultiModalAttnModel(
-            img_model_best, 
-            audio_model_best, 
-            shared_dim=hyperpara["model_params"]["shared_dim"],
-            num_classes=hyperpara["model_params"]["num_classes"],
-            attn_heads=hyperpara["model_params"]["attn_heads"],
-            attn_dropout=hyperpara["model_params"]["attn_dropout"],
-            vision_drop_prob=hyperpara["model_params"]["vision_drop_prob"], 
-            audio_drop_prob=hyperpara["model_params"]["audio_drop_prob"]
-        ).to(device)
-    case "MultiModalAttnCLSModel":
-        multimodal_model = MultiModalAttnCLSModel(
-            img_model_best,
-            audio_model_best,
-            shared_dim=hyperpara["model_params"]["shared_dim"],
-            num_classes=hyperpara["model_params"]["num_classes"],
-            attn_heads=hyperpara["model_params"]["attn_heads"],
-            attn_dropout=hyperpara["model_params"]["attn_dropout"],
-            vision_drop_prob=hyperpara["model_params"]["vision_drop_prob"],
-            audio_drop_prob=hyperpara["model_params"]["audio_drop_prob"]
-        ).to(device)
-    case _:
-        raise ValueError(f"未知的多模态模型类型: {hyperpara['model']}")
-    
+# multimodal_model = HumanLikeMultimodalModel(img_model_best, audio_model_best).to(device)
+# multimodal_model = MultimodalModelDrop(
+#     img_model_best,
+#     audio_model_best,
+#     shared_dim=512,
+#     num_classes=2,
+#     vision_drop_prob=0.5,
+#     audio_drop_prob=0.5,
+#     emb_mask_prob=0.7,
+# ).to(device)
+multimodal_model = MultiModalAttnModel(
+    img_model_best, audio_model_best, vision_drop_prob=0.5, audio_drop_prob=0.5
+).to(device)
 multi_train_ds = RandomPairedDataset(img_train_ds, audio_train_ds)
 multi_val_ds = RandomPairedDataset(img_val_ds, audio_val_ds)
 
+train_loader = DataLoader(multi_train_ds, batch_size=cfg.batch_size, shuffle=True)
+val_loader = DataLoader(multi_val_ds, batch_size=cfg.batch_size, shuffle=False)
 
-train_loader = DataLoader(multi_train_ds, batch_size=hyperpara["batch_size"], shuffle=True)
-val_loader = DataLoader(multi_val_ds, batch_size=hyperpara["batch_size"], shuffle=False)
+train_loader = DataLoader(multi_train_ds, batch_size=16, shuffle=True)
+val_loader = DataLoader(multi_val_ds, batch_size=16, shuffle=False)
 
-optimizer = optim.AdamW(multimodal_model.parameters(), lr=hyperpara["lr"])
+optimizer = optim.AdamW(multimodal_model.parameters(), lr=1e-5)
 
 
 print("开始多模态协同训练...")
 
 best_val_acc = 0.0
 best_val_loss = np.inf
-save_path = "./checkpoints/4100_525/attn/multimodal_attn_model_best6.pth"
+save_path = "/home/amax/dakai/neuron/checkpoints/4100_525/drop/multimodal_attn_drop_model_best9.pth"
 
 # print_trainable_parameters(multimodal_model)
 
-for epoch in range(10):
+for epoch in range(cfg.epochs):
     # ================= 训练阶段 =================
     multimodal_model.train()
     total_train_loss = 0
@@ -273,7 +223,6 @@ for epoch in range(10):
     # ================= 保存最佳模型 =================
     if avg_val_loss < best_val_loss:
         best_val_loss = avg_val_loss
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
         torch.save(multimodal_model.state_dict(), save_path)
         print(f"  >>> 新的最佳模型已保存 (Acc: {best_val_loss:.4f})")
 

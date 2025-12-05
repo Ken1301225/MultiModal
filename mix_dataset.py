@@ -1,5 +1,6 @@
 import os
 import random
+import numpy as np
 import torch
 import librosa
 from pathlib import Path
@@ -9,6 +10,9 @@ from PIL import Image as PILImage
 from transformers import AutoImageProcessor
 from transformers import AutoFeatureExtractor
 from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize
+from datasets import load_dataset
+
+from dataset import load_local_audio_dataset_dir
 
 
 def load_local_image_dataset(data_dir):
@@ -310,83 +314,227 @@ class PairedDatasetFactory:
             raise StopIteration
 
 
-# ==============================================================================
-#  方案二：聚合数据集 (单一数据集模式)
-# ==============================================================================
-
-
-class MegaPairedDataset(TorchDataset):
+def load_pure_audio_files(data_dir):
     """
-    一个聚合的数据集，将多个 PairedVisionAudioDataset 实例整合成一个。
+    辅助函数：扫描音频目录，分离出纯猫和纯狗的音频文件路径。
+    假设目录结构为:
+    data_dir/
+      ├── cats/ (or Cat)
+      └── dogs/ (or Dog)
+    或者文件名包含 label。
+    """
+    print(f"正在从 {data_dir} 加载纯净音频文件...")
+    audio_cats = []
+    audio_dogs = []
 
-    它表现得像一个单一的、巨大的数据集。在 __getitem__ 时，除了返回数据样本，
-    还会额外返回一个 'sequence_id'，以标识样本的来源子数据集。
+    data_dir_path = Path(data_dir)
+
+    # 遍历所有音频文件
+    # 这里假设文件名或父文件夹名包含类别信息，或者根据 dataset.py 中的逻辑
+    # 如果是 DvC 数据集，通常有 cats 和 dogs 子文件夹
+    for file_path in data_dir_path.rglob("*"):
+        if file_path.suffix.lower() in {".wav", ".mp3", ".flac", ".ogg", ".m4a"}:
+            path_str = str(file_path)
+            parent_name = file_path.parent.name.lower()
+            file_name = file_path.name.lower()
+
+            # 简单的关键词匹配逻辑
+            if "cat" in parent_name or "cat" in file_name:
+                audio_cats.append(path_str)
+            elif "dog" in parent_name or "dog" in file_name:
+                audio_dogs.append(path_str)
+
+    print(f"找到纯猫音频: {len(audio_cats)} 个")
+    print(f"找到纯狗音频: {len(audio_dogs)} 个")
+
+    if not audio_cats or not audio_dogs:
+        raise ValueError(f"在 {data_dir} 中未找到足够的猫/狗音频文件，请检查路径结构。")
+
+    return audio_cats, audio_dogs
+
+
+class CausalConflictDataset(TorchDataset):
+    """
+    仿照 PairedVisionAudioDataset 风格编写的因果冲突数据集。
+
+    该类不依赖预先生成的 Arrow 数据集，而是直接从源加载纯净数据，
+    并构建 4 种实验条件（一致/冲突）。
     """
 
     def __init__(
-        self, main_image_dir, main_audio_dir, image_transforms, audio_feature_extractor
+        self,
+        image_data_dir,  # 可以是 cache_dir 或者本地图片文件夹
+        audio_data_dir,
+        image_transforms,
+        audio_feature_extractor,
+        samples_per_condition=100,
+        seed=42,
     ):
+        """
+        初始化数据集。
+        Args:
+            image_data_dir (str): 图像数据集路径 (用于 load_dataset 的 cache_dir)。
+            audio_data_dir (str): 音频数据集的文件夹路径。
+            image_transforms (callable): 应用于图像的转换函数。
+            audio_feature_extractor (callable): 用于处理音频的特征提取器。
+            samples_per_condition (int): 每种条件生成的样本数量。
+            audio_sampling_rate (int): 音频采样率。
+        """
         super().__init__()
-        print("--- MegaPairedDataset 初始化 ---")
-        # 1. 使用 Factory 找到所有匹配的子数据集并实例化它们
-        factory = PairedDatasetFactory(
-            main_image_dir, main_audio_dir, image_transforms, audio_feature_extractor
+        self.image_transforms = image_transforms
+        self.audio_feature_extractor = audio_feature_extractor
+        self.audio_sampling_rate = 16000
+        self.samples_per_condition = samples_per_condition
+        random.seed(seed)
+        np.random.seed(seed)
+        print("--- CausalConflictDataset 初始化 ---")
+
+        # 1. 加载图像数据 (使用 HuggingFace datasets，类似 train.py)
+        # 注意：这里我们直接加载原始的 cats_vs_dogs，因为它包含纯净的分类
+        print(f"加载图像数据集 (Cache: {image_data_dir})...")
+        try:
+            # 尝试加载本地或缓存的 dataset
+            self.raw_img_dataset = load_dataset(
+                "microsoft/cats_vs_dogs", split="train", cache_dir=image_data_dir
+            )
+        except Exception as e:
+            print(f"加载 HF 数据集失败: {e}，尝试作为本地文件夹加载...")
+            # 如果你有本地类似 ImageFolder 结构的图片目录，可以在这里扩展逻辑
+            raise e
+
+        # 分离图像索引 (0: Cat, 1: Dog - 基于 microsoft/cats_vs_dogs 的常见定义)
+        # 注意：microsoft/cats_vs_dogs 的 labels: 1=Dog, 0=Cat
+        self.img_indices_cat = [
+            i for i, x in enumerate(self.raw_img_dataset) if x["labels"] == 0
+        ]
+        self.img_indices_dog = [
+            i for i, x in enumerate(self.raw_img_dataset) if x["labels"] == 1
+        ]
+
+        print(
+            f"图像加载完成: 猫 {len(self.img_indices_cat)}, 狗 {len(self.img_indices_dog)}"
         )
 
-        self.sub_datasets = []
-        self.seq_ids = []
-        # 遍历工厂，收集所有实例化的子数据集
-        for dataset, seq_id in factory:
-            self.sub_datasets.append(dataset)
-            self.seq_ids.append(seq_id)
+        # 2. 加载音频路径
+        self.audio_paths_cat, self.audio_paths_dog = load_pure_audio_files(
+            audio_data_dir
+        )
 
-        # 2. 计算累积长度，用于全局索引
-        self.cumulative_sizes = self.cumsum(self.sub_datasets)
-        print("---------------------------------")
+        # 3. 构建实验样本列表
+        self.samples = []
+        self._create_conflict_pairs()
 
-    @staticmethod
-    def cumsum(sequence):
-        """计算数据集长度的累积和。"""
-        r, s = [], 0
-        for d in sequence:
-            l = len(d)
-            r.append(l + s)
-            s += l
-        return r
+        print(f"数据集构建完成: 总样本数 {len(self.samples)}")
+        print("------------------------------------")
+
+    def _create_conflict_pairs(self):
+        """生成四种条件的配对列表"""
+
+        # 定义四种条件：(条件名, 图像源索引, 音频源路径, 视觉标签, 听觉标签)
+        conditions = [
+            (
+                "Congruent_Cat",
+                self.img_indices_cat,
+                self.audio_paths_cat,
+                0,
+                0,
+            ),  # 视猫听猫
+            (
+                "Congruent_Dog",
+                self.img_indices_dog,
+                self.audio_paths_dog,
+                1,
+                1,
+            ),  # 视狗听狗
+            (
+                "Conflict_V_Cat",
+                self.img_indices_cat,
+                self.audio_paths_dog,
+                0,
+                1,
+            ),  # 视猫听狗
+            (
+                "Conflict_V_Dog",
+                self.img_indices_dog,
+                self.audio_paths_cat,
+                1,
+                0,
+            ),  # 视狗听猫
+        ]
+
+        for cond_name, img_idxs, audio_paths, v_label, a_label in conditions:
+            # 随机采样
+            # 使用 random.choices 允许重复采样，确保能凑够数量
+            sel_img_idxs = random.choices(img_idxs, k=self.samples_per_condition)
+            sel_audio_paths = random.choices(audio_paths, k=self.samples_per_condition)
+
+            for i in range(self.samples_per_condition):
+                self.samples.append(
+                    {
+                        "condition": cond_name,
+                        "img_idx": sel_img_idxs[i],  # 图像在 dataset 中的索引
+                        "audio_path": sel_audio_paths[i],  # 音频文件的绝对路径
+                        "v_label": v_label,
+                        "a_label": a_label,
+                    }
+                )
 
     def __len__(self):
-        """返回所有子数据集合并后的总长度。"""
-        return self.cumulative_sizes[-1] if self.cumulative_sizes else 0
+        return len(self.samples)
 
     def __getitem__(self, idx):
         """
-        根据全局索引获取一个样本。
+        获取一个样本，格式仿照 PairedVisionAudioDataset.__getitem__
         """
-        if idx < 0:
-            if -idx > len(self):
-                raise ValueError(
-                    "absolute value of index should not exceed dataset length"
-                )
-            idx = len(self) + idx
+        item_info = self.samples[idx]
 
-        # 查找该索引属于哪个子数据集
-        dataset_idx = torch.searchsorted(
-            torch.tensor(self.cumulative_sizes), idx, right=True
-        ).item()
+        # 1. 获取并处理图像
+        # 从 HF dataset 中读取
+        img_data = self.raw_img_dataset[item_info["img_idx"]]
+        image = img_data["image"].convert("RGB")
 
-        # 计算在该子数据集内的局部索引
-        if dataset_idx == 0:
-            sample_idx = idx
+        # 应用转换
+        if self.image_transforms:
+            pixel_values = self.image_transforms(image)
         else:
-            sample_idx = idx - self.cumulative_sizes[dataset_idx - 1]
+            pixel_values = image
 
-        # 从子数据集中获取样本
-        sample = self.sub_datasets[dataset_idx][sample_idx]
+        # 2. 获取并处理音频 (使用 librosa，与 mix_dataset.py 保持一致)
+        audio_path = item_info["audio_path"]
 
-        # 添加来源信息
-        sample["sequence_id"] = self.seq_ids[dataset_idx]
+        # 加载音频
+        # 注意：这里处理了可能的文件读取错误，或者你可以让它直接抛出
+        try:
+            audio_array, _ = librosa.load(
+                audio_path, sr=self.audio_sampling_rate, mono=True
+            )
+        except Exception as e:
+            print(f"Error loading audio {audio_path}: {e}")
+            # 如果加载失败，生成一个全零的静音片段防止崩溃
+            audio_array = np.zeros(self.audio_sampling_rate)  # 1秒静音
 
-        return sample
+        # 特征提取
+        audio_inputs = self.audio_feature_extractor(
+            audio_array,
+            sampling_rate=self.audio_sampling_rate,
+            return_tensors="pt",
+            padding="max_length",  # 或者是 True，视模型要求而定
+            max_length=self.audio_sampling_rate * 1,  # 限制长度，例如 1 秒
+            truncation=True,
+        )
+
+        input_values = audio_inputs["input_values"].squeeze(0)
+
+        # 3. 返回字典
+        return {
+            "pixel_values": pixel_values,
+            "input_values": input_values,
+            "condition": item_info["condition"],
+            "v_label": torch.tensor(item_info["v_label"], dtype=torch.long),
+            "a_label": torch.tensor(item_info["a_label"], dtype=torch.long),
+            # 为了兼容性，labels 可以设为视觉标签，或者根据实验需求定
+            "labels": torch.tensor(item_info["v_label"], dtype=torch.long),
+        }
 
 
 # --- 如何使用这个类的示例 ---
@@ -474,26 +622,26 @@ if __name__ == "__main__":
                 print(f"在第{seq_id}组发现不同标签的样本！")
 
     print("\n\n" + "=" * 20 + " 测试方案二: MegaPairedDataset " + "=" * 20)
-    mega_dataset = MegaPairedDataset(
-        main_image_dir=MAIN_IMG_DIR,
-        main_audio_dir=MAIN_AUDIO_DIR,
-        image_transforms=image_transforms,
-        audio_feature_extractor=audio_feature_extractor,
-    )
+    # mega_dataset = MegaPairedDataset(
+    #     main_image_dir=MAIN_IMG_DIR,
+    #     main_audio_dir=MAIN_AUDIO_DIR,
+    #     image_transforms=image_transforms,
+    #     audio_feature_extractor=audio_feature_extractor,
+    # )
 
-    print(f"\n聚合数据集总大小: {len(mega_dataset)}")
-    if len(mega_dataset) > 0:
-        print("从聚合数据集中随机抽取几个样本进行检查:")
-        indices_to_check = [0, len(mega_dataset) // 2, len(mega_dataset) - 1]
-        for i in indices_to_check:
-            sample = mega_dataset[i]
-            print(
-                f"  - 样本索引 {i}: "
-                f"来自序号 {sample['sequence_id']} 的子数据集, "
-                f"图像像素值形状 {sample['pixel_values'].shape}, "
-                f"音频输入值形状 {sample['input_values'].shape}, "
-                f"标签为 {sample['labels'].item()}"
-            )
+    # print(f"\n聚合数据集总大小: {len(mega_dataset)}")
+    # if len(mega_dataset) > 0:
+    #     print("从聚合数据集中随机抽取几个样本进行检查:")
+    #     indices_to_check = [0, len(mega_dataset) // 2, len(mega_dataset) - 1]
+    #     for i in indices_to_check:
+    #         sample = mega_dataset[i]
+    #         print(
+    #             f"  - 样本索引 {i}: "
+    #             f"来自序号 {sample['sequence_id']} 的子数据集, "
+    #             f"图像像素值形状 {sample['pixel_values'].shape}, "
+    #             f"音频输入值形状 {sample['input_values'].shape}, "
+    #             f"标签为 {sample['labels'].item()}"
+    #         )
 
     # 你可以为这个聚合数据集创建一个 DataLoader
     # from torch.utils.data import DataLoader
