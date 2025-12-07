@@ -96,11 +96,22 @@ def inference(
                     logits_a_accum.append(audio_outputs.logits)
         all_logits_v = torch.cat(logits_v_accum)
         all_logits_a = torch.cat(logits_a_accum)
-        all_logits_c = all_logits_v + all_logits_a  # Logit 加和融合
+        
+        rel_logits_v = all_logits_v[:, 1] - all_logits_v[:, 0]
+        rel_logits_a = all_logits_a[:, 1] - all_logits_a[:, 0]
 
-        def calc_prop(logits):
-            # argmax -> 0 or 1 -> mean
-            return (torch.argmax(logits, dim=1) == 1).float().mean().item()
+        if calib_params:
+            a_v, b_v = calib_params["img"]
+            a_a, b_a = calib_params["audio"]
+
+            calib_v = (rel_logits_v * a_v) + b_v
+            calib_a = (rel_logits_a * a_a) + b_a
+
+            final_score = calib_v + calib_a
+        else:
+            final_score = rel_logits_v + rel_logits_a
+
+        p_baseline_1 = (final_score > 0).float().mean().item()
 
         # --- 关键：将当前 Pair 的结果存入列表 ---
 
@@ -135,7 +146,6 @@ def inference(
             if ("audio" in mode and total_samples > 0)
             else None
         )
-        p_baseline_1 = calc_prop(all_logits_c)
 
         p_rows.append(
             [seq_id, total_samples, p_mix_1, p_img_1, p_audio_1, p_baseline_1]
@@ -373,6 +383,81 @@ def set_seed(seed: int = 42):
     if torch.cuda.is_available():
         torch.cuda.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
+        
+def get_global_z_score_params(model, dataset_factory, device, modality="image"):
+    """
+    遍历整个数据集工厂（所有混合度），计算全局的均值和标准差。
+    已修复：添加 pad_collate 处理变长音频数据。
+    """
+    print(f"正在计算 {modality} 模态的【全局】Z-Score 参数...")
+
+    model.eval()
+    all_logits_list = []
+    total_count = 0
+
+    def pad_collate(batch):
+        pixel_values = [item["pixel_values"] for item in batch]
+        input_values = [item["input_values"] for item in batch]
+        labels = [item["labels"] for item in batch]
+
+        pixel_values = torch.stack(pixel_values)
+
+        if input_values[0].dim() > 1:
+            input_values = [iv.squeeze() for iv in input_values]
+
+        from torch.nn.utils.rnn import pad_sequence
+
+        # batch_first=True 会生成 [Batch, Max_Len]
+        input_values_padded = pad_sequence(
+            input_values, batch_first=True, padding_value=0.0
+        )
+
+        labels = torch.tensor(labels)
+
+        return {
+            "pixel_values": pixel_values,
+            "input_values": input_values_padded,
+            "labels": labels,
+        }
+
+    with torch.no_grad():
+        for dataset, seq_id in dataset_factory:
+
+            # 使用自定义 collate_fn 创建 Loader
+            loader = torch.utils.data.DataLoader(
+                dataset,
+                batch_size=64,
+                shuffle=False,
+                num_workers=0,
+                collate_fn=pad_collate,
+            )
+
+            for batch in loader:
+                if modality == "image":
+                    inputs = batch["pixel_values"].to(device)
+                    outputs = model(pixel_values=inputs)
+                elif modality == "audio":
+                    inputs = batch["input_values"].to(device)
+                    outputs = model(input_values=inputs)
+
+                relative_logit = outputs.logits[:, 1] - outputs.logits[:, 0]
+                all_logits_list.append(relative_logit.cpu())
+
+            total_count += len(dataset)
+
+    all_logits_tensor = torch.cat(all_logits_list, dim=0)
+
+    mean_val = torch.mean(all_logits_tensor).item()
+    std_val = torch.std(all_logits_tensor).item()
+
+    if std_val < 1e-6:
+        std_val = 1.0
+
+    print(
+        f"--> {modality} Global Params (N={total_count}) | Mean: {mean_val:.4f} | Std: {std_val:.4f}"
+    )
+
+    return 1.0 / std_val, -mean_val / std_val
 
 
 if __name__ == "__main__":
@@ -470,90 +555,96 @@ if __name__ == "__main__":
     inference_model.load_state_dict(torch.load(save_path, map_location=device))
     inference_model.eval()
     print("模型加载成功！")
+    
+    a_v, b_v = get_global_z_score_params(img_model_best, multi__ds, device, "image")
+    a_a, b_a = get_global_z_score_params(audio_model_best, multi__ds, device, "audio")
 
-    # p_rows = inference(
-    #     inference_model,
-    #     img_model_best,
-    #     audio_model_best,
-    #     multi__ds,
-    #     device,
-    #     mode=["mix", "image", "audio"],
-    #     eval_mode=["choice_proportion"],
-    # )
-    # p_rows.sort(key=lambda x: x[0])
+    calib_params = {"img": (a_v, b_v), "audio": (a_a, b_a)}
 
-    # seq_ids = [row[0] for row in p_rows]
-    # p_mix_1 = [row[2] for row in p_rows]  # 多模态
-    # p_img_1 = [row[3] for row in p_rows]  # 图像
-    # p_audio_1 = [row[4] for row in p_rows]  # 音频
-    # p_baseline_1 = [row[5] for row in p_rows]  # 音频
-    # seq_map = {
-    #     0: 0,
-    #     1: 0.1,
-    #     2: 0.2,
-    #     3: 0.25,
-    #     4: 0.3,
-    #     5: 0.35,
-    #     6: 0.4,
-    #     7: 0.45,
-    #     8: 0.5,
-    #     9: 0.55,
-    #     10: 0.60,
-    #     11: 0.65,
-    #     12: 0.7,
-    #     13: 0.75,
-    #     14: 0.8,
-    #     15: 0.9,
-    #     16: 1,
-    # }
-    # ratio_x = [seq_map[sid] for sid in seq_ids]
+    p_rows = inference(
+        inference_model,
+        img_model_best,
+        audio_model_best,
+        multi__ds,
+        device,
+        mode=["mix", "image", "audio"],
+        eval_mode=["choice_proportion"],
+        calib_params=calib_params,
+    )
+    p_rows.sort(key=lambda x: x[0])
 
-    # plt.figure(figsize=(10, 6))
+    seq_ids = [row[0] for row in p_rows]
+    p_mix_1 = [row[2] for row in p_rows]  # 多模态
+    p_img_1 = [row[3] for row in p_rows]  # 图像
+    p_audio_1 = [row[4] for row in p_rows]  # 音频
+    p_baseline_1 = [row[5] for row in p_rows]  # 音频
+    seq_map = {
+        0: 0,
+        1: 0.1,
+        2: 0.2,
+        3: 0.25,
+        4: 0.3,
+        5: 0.35,
+        6: 0.4,
+        7: 0.45,
+        8: 0.5,
+        9: 0.55,
+        10: 0.60,
+        11: 0.65,
+        12: 0.7,
+        13: 0.75,
+        14: 0.8,
+        15: 0.9,
+        16: 1,
+    }
+    ratio_x = [seq_map[sid] for sid in seq_ids]
 
-    # # 获取拟合参数
-    # _, k_mix = plot_sigmoid(ratio_x, p_mix_1, "mix", "tab:blue")
-    # _, k_img = plot_sigmoid(ratio_x, p_img_1, "image", "tab:orange")
-    # _, k_audio = plot_sigmoid(ratio_x, p_audio_1, "audio", "tab:green")
-    # _, k_baseline = plot_sigmoid(
-    #     ratio_x, p_baseline_1, "baseline (Bayes Logit)", "tab:red"
-    # )
+    plt.figure(figsize=(10, 6))
 
-    # # === 验证贝叶斯最优整合 ===
-    # if k_img is not None and k_audio is not None and k_mix is not None:
-    #     # 计算理论上的贝叶斯最优斜率
-    #     k_optimal = np.sqrt(k_img**2 + k_audio**2)
+    # 获取拟合参数
+    _, k_mix = plot_sigmoid(ratio_x, p_mix_1, "mix", "tab:blue")
+    _, k_img = plot_sigmoid(ratio_x, p_img_1, "image", "tab:orange")
+    _, k_audio = plot_sigmoid(ratio_x, p_audio_1, "audio", "tab:green")
+    _, k_baseline = plot_sigmoid(
+        ratio_x, p_baseline_1, "baseline (Bayes Logit)", "tab:red"
+    )
 
-    #     print("\n========== 贝叶斯整合验证 ==========")
-    #     print(f"Image Slope (k_v): {k_img:.4f}")
-    #     print(f"Audio Slope (k_a): {k_audio:.4f}")
-    #     print(f"Actual Mix Slope : {k_mix:.4f}")
-    #     print(f"Baseline Slope : {k_baseline:.4f}")
-    #     print(f"Optimal Bayes Slope (sqrt(kv^2 + ka^2)): {k_optimal:.4f}")
+    # === 验证贝叶斯最优整合 ===
+    if k_img is not None and k_audio is not None and k_mix is not None:
+        # 计算理论上的贝叶斯最优斜率
+        k_optimal = np.sqrt(k_img**2 + k_audio**2)
 
-    #     diff = abs(k_mix - k_optimal) / k_optimal * 100
-    #     print(f"偏差: {diff:.2f}%")
-    #     bayes_path = os.path.join(cfg.ckpt_dir, "bayes.json")
-    #     with open(bayes_path, "w", encoding="utf-8") as f:
-    #         # 将对象转为字典保存，过滤掉方法
-    #         config_dict = {
-    #             "Image Slope (k_v)": f"{k_img:.4f}",
-    #             "Audio Slope (k_a)": f"{k_audio:.4f}",
-    #             "Actual Mix Slope": f"{k_mix:.4f}",
-    #             "Baseline Slope": f"{k_baseline:.4f}",
-    #             "Optimal Bayes Slope (sqrt(kv^2 + ka^2))": f"{k_optimal:.4f}",
-    #             "偏差": f"{diff:.2f}%",
-    #         }
-    #         json.dump(config_dict, f, indent=4, ensure_ascii=False)
+        print("\n========== 贝叶斯整合验证 ==========")
+        print(f"Image Slope (k_v): {k_img:.4f}")
+        print(f"Audio Slope (k_a): {k_audio:.4f}")
+        print(f"Actual Mix Slope : {k_mix:.4f}")
+        print(f"Baseline Slope : {k_baseline:.4f}")
+        print(f"Optimal Bayes Slope (sqrt(kv^2 + ka^2)): {k_optimal:.4f}")
 
-    # plt.xlabel("dog ratio")
-    # plt.ylabel("Proportion dog choice")
-    # plt.grid(True, linestyle="--", alpha=0.4)
-    # plt.xticks(np.arange(0, 1.1, 0.1))  # 从 0 到 1，每 0.1 为一个刻度
-    # plt.legend()
+        diff = abs(k_mix - k_optimal) / k_optimal * 100
+        print(f"偏差: {diff:.2f}%")
+        bayes_path = os.path.join(cfg.ckpt_dir, "bayes.json")
+        with open(bayes_path, "w", encoding="utf-8") as f:
+            # 将对象转为字典保存，过滤掉方法
+            config_dict = {
+                "Image Slope (k_v)": f"{k_img:.4f}",
+                "Audio Slope (k_a)": f"{k_audio:.4f}",
+                "Actual Mix Slope": f"{k_mix:.4f}",
+                "Baseline Slope": f"{k_baseline:.4f}",
+                "Optimal Bayes Slope (sqrt(kv^2 + ka^2))": f"{k_optimal:.4f}",
+                "偏差": f"{diff:.2f}%",
+            }
+            json.dump(config_dict, f, indent=4, ensure_ascii=False)
 
-    # plt.tight_layout()
-    # img_save = os.path.join(cfg.ckpt_dir, "bayes_result.png")
-    # plt.savefig(img_save, dpi=300)
+    plt.xlabel("dog ratio")
+    plt.ylabel("Proportion dog choice")
+    plt.grid(True, linestyle="--", alpha=0.4)
+    plt.xticks(np.arange(0, 1.1, 0.1))  # 从 0 到 1，每 0.1 为一个刻度
+    plt.legend()
+
+    plt.tight_layout()
+    img_save = os.path.join(cfg.ckpt_dir, "bayes_result.png")
+    plt.savefig(img_save, dpi=300)
     
     from mix_dataset import PairedVisionAudioDataset
     
