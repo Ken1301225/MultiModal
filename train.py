@@ -1,4 +1,7 @@
 import os
+
+os.environ["HF_DATASETS_OFFLINE"] = "1"
+
 import random
 from torch.utils.tensorboard import SummaryWriter
 import numpy as np
@@ -18,6 +21,7 @@ from transformers import (
     AutoModelForAudioClassification,
     AutoModelForImageClassification,
 )
+from config import Config
 import os
 from datasets import load_dataset
 from model import (
@@ -44,19 +48,41 @@ def set_seed(seed: int = 42):
         torch.cuda.manual_seed_all(seed)
 
 
-log_dir = "./logs/attn_1"  # 日志存储路径
-writer = SummaryWriter(log_dir=log_dir)
+cfg = Config(
+    seed=42,
+    batch_size=16,
+    lr=1e-5,
+    epochs=10,
+    model_type="MultiModalAttnCLSModel",
+    base_ckpt_dir="/home/amax/dakai/neuron/checkpoints",
+    img_model_path="/home/amax/dakai/neuron/resnet-cats-dogs2/checkpoint-4100",
+    audio_best_path="/home/amax/dakai/neuron/wav2vec2-cats-dogs/checkpoint-525",
+    model_params={
+        "shared_dim": 1024,
+        "num_classes": 2,
+        "attn_heads": 16,
+        "emb_mask_prob": 0.7,
+        "attn_dropout": 0.5,
+        "linear_dropout": 0.2,
+        "vision_drop_prob": 0.5,
+        "audio_drop_prob": 0.5,
+    },
+    optimizer="AdamW",
+)
+set_seed(cfg.seed)
+cfg.create_directories()  # 创建文件夹并保存配置
 
-set_seed(42)
+writer = SummaryWriter(log_dir=cfg.log_dir)
 
-img_model_path = "./resnet-cats-dogs3/checkpoint-4100"
-img_model_best = AutoModelForImageClassification.from_pretrained(img_model_path)
+print(f"当前使用的设备: {cfg.device}")
+print(f"实验名称: {cfg.run_name}")
+
+img_model_best = AutoModelForImageClassification.from_pretrained(cfg.img_model_path)
 
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+device = cfg.device
 
-audio_best_path = "./wav2vec2-cats-dogs/checkpoint-525"
-audio_model_best = AutoModelForAudioClassification.from_pretrained(audio_best_path)
+audio_model_best = AutoModelForAudioClassification.from_pretrained(cfg.audio_best_path)
 
 
 audio_data_dir = "E:/NeuralScience/project/DvC"
@@ -119,57 +145,70 @@ print(f"标签列名: {label_col}")
 print(f"标签映射: {label2id}")
 
 
-# multimodal_model = HumanLikeMultimodalModel(img_model_best, audio_model_best).to(device)
-# multimodal_model = MultimodalModelDrop(
-#     img_model_best,
-#     audio_model_best,
-#     shared_dim=512,
-#     num_classes=2,
-#     vision_drop_prob=0.5,  # 20% 概率整路屏蔽视觉
-#     audio_drop_prob=0.5,  # 20% 概率整路屏蔽音频
-#     emb_mask_prob=0.7,  # 每个 embedding 维度 10% 概率置零
-# ).to(device)
-multimodal_model = MultiModalAttnCLSModel(
-    img_model_best,
-    audio_model_best,
-    shared_dim=512,
-    num_classes=2,
-    attn_heads=8,
-    attn_dropout=0.4,
-    vision_drop_prob=0.3,
-    audio_drop_prob=0.3,
-).to(device)
-# multimodal_model = MultiModalAttnCLSModel(
-#     img_model_best,
-#     audio_model_best,
-#     shared_dim=512,
-#     num_classes=2,
-#     attn_heads=8,
-#     attn_dropout=0.4,
-#     vision_drop_prob=0.3,
-#     audio_drop_prob=0.3,
-# )
+# ================= 保存超参数 =================
+mp = cfg.model_params
+
+match cfg.model_type:
+    case "HumanLikeMultimodalModel":
+        multimodal_model = HumanLikeMultimodalModel(
+            img_model_best,
+            audio_model_best,
+            shared_dim=mp["shared_dim"],
+            num_classes=mp["num_classes"],
+        ).to(device)
+    case "MultimodalModelDrop":
+        multimodal_model = MultimodalModelDrop(
+            img_model_best,
+            audio_model_best,
+            shared_dim=mp["shared_dim"],
+            num_classes=mp["num_classes"],
+            vision_drop_prob=mp["vision_drop_prob"],
+            audio_drop_prob=mp["audio_drop_prob"],
+            emb_mask_prob=mp["emb_mask_prob"],
+        ).to(device)
+    case "MultiModalAttnModel":
+        multimodal_model = MultiModalAttnModel(
+            img_model_best,
+            audio_model_best,
+            shared_dim=mp["shared_dim"],
+            num_classes=mp["num_classes"],
+            attn_heads=mp["attn_heads"],
+            attn_dropout=mp["attn_dropout"],
+            vision_drop_prob=mp["vision_drop_prob"],
+            audio_drop_prob=mp["audio_drop_prob"],
+        ).to(device)
+    case "MultiModalAttnCLSModel":
+        multimodal_model = MultiModalAttnCLSModel(
+            img_model_best,
+            audio_model_best,
+            shared_dim=mp["shared_dim"],
+            num_classes=mp["num_classes"],
+            attn_heads=mp["attn_heads"],
+            attn_dropout=mp["attn_dropout"],
+            vision_drop_prob=mp["vision_drop_prob"],
+            audio_drop_prob=mp["audio_drop_prob"],
+        ).to(device)
+    case _:
+        raise ValueError(f"未知的多模态模型类型: {cfg.model_type}")
+
+
 multi_train_ds = RandomPairedDataset(img_train_ds, audio_train_ds)
 multi_val_ds = RandomPairedDataset(img_val_ds, audio_val_ds)
 
+train_loader = DataLoader(multi_train_ds, batch_size=cfg.batch_size, shuffle=True)
+val_loader = DataLoader(multi_val_ds, batch_size=cfg.batch_size, shuffle=False)
 
-train_loader = DataLoader(multi_train_ds, batch_size=16, shuffle=True)
-val_loader = DataLoader(multi_val_ds, batch_size=16, shuffle=False)
-
-optimizer = optim.AdamW(multimodal_model.parameters(), lr=1e-5)
+optimizer = optim.AdamW(multimodal_model.parameters(), lr=cfg.lr)
 
 
 print("开始多模态协同训练...")
 
 best_val_acc = 0.0
 best_val_loss = np.inf
-save_path = (
-    "./checkpoints/4100_525/attn/multimodal_attn_model_best1.pth"
-)
 
 # print_trainable_parameters(multimodal_model)
 
-for epoch in range(10):
+for epoch in range(cfg.epochs):
     # ================= 训练阶段 =================
     multimodal_model.train()
     total_train_loss = 0
@@ -236,8 +275,8 @@ for epoch in range(10):
     # ================= 保存最佳模型 =================
     if avg_val_loss < best_val_loss:
         best_val_loss = avg_val_loss
-        torch.save(multimodal_model.state_dict(), save_path)
+        torch.save(multimodal_model.state_dict(), cfg.save_path)
         print(f"  >>> 新的最佳模型已保存 (Acc: {best_val_loss:.4f})")
 
-print(f"\n训练结束! 最佳验证集准确率: {best_val_acc:.4f}")
+print(f"\n训练结束! 最佳验证集准确率: {best_val_loss:.4f}")
 writer.close()

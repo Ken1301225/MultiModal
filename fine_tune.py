@@ -2,6 +2,9 @@ import os
 import librosa
 import torch
 import torch
+
+os.environ["HF_DATASETS_OFFLINE"] = "1"
+
 from transformers import AutoModelForImageClassification
 
 # os.environ["WANDB_API_KEY"] = "ea6035b7de02f0fc022ba881d1520987a321ede1"
