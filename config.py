@@ -5,7 +5,6 @@ import json
 
 class Config:
     def __init__(self, **kwargs):
-        # 默认参数
         self.seed = kwargs.get("seed", 42)
         self.device = kwargs.get("device", "cuda")
         self.base_ckpt_dir = kwargs.get(
@@ -30,7 +29,6 @@ class Config:
             },
         )
 
-        # 自动生成路径
         self.run_name = self._generate_run_name()
         self.ckpt_dir = os.path.join(self.base_ckpt_dir, self.run_name)
         self.log_dir = os.path.join(self.ckpt_dir, "logs")
@@ -48,7 +46,6 @@ class Config:
         """根据当前配置生成唯一的实验名称"""
         timestamp = datetime.datetime.now().strftime("%m%d_%H%M")
 
-        # 简化模型名称
         model_name_map = {
             "MultimodalModelDrop": "Drop",
             "MultiModalAttnModel": "Attn",
@@ -57,14 +54,11 @@ class Config:
         }
         short_name = model_name_map.get(self.model_type, "Model")
 
-        # 提取关键参数
         lr_str = f"{self.lr:.0e}"
         mp = self.model_params
 
-        # 构建基础名称
         run_name = f"{short_name}_lr{lr_str}_bs{self.batch_size}"
 
-        # 根据模型类型添加特定后缀
         if "Drop" in short_name:
             run_name += f"_mask{mp['emb_mask_prob']}_v{mp['vision_drop_prob']}_a{mp['audio_drop_prob']}"
         elif "Attn" in short_name:
@@ -78,10 +72,8 @@ class Config:
         os.makedirs(self.log_dir, exist_ok=True)
         os.makedirs(self.ckpt_dir, exist_ok=True)
 
-        # 保存配置到 json
         config_path = os.path.join(self.ckpt_dir, "config.json")
         with open(config_path, "w") as f:
-            # 将对象转为字典保存，过滤掉方法
             config_dict = {
                 k: v for k, v in self.__dict__.items() if not k.startswith("_")
             }
@@ -110,20 +102,12 @@ class Config:
         with open(json_path, "r", encoding="utf-8") as f:
             config_dict = json.load(f)
 
-        # 1. 使用字典解包初始化实例
-        # 注意：此时 __init__ 会自动执行，默认会生成一个新的带当前时间戳的 run_name
         config = cls(**config_dict)
 
-        # 2. 如果是评估/恢复模式，我们需要覆盖掉刚才自动生成的时间戳路径，
-        # 强制使用 JSON 中记录的旧路径
         if eval_mode:
-            # 恢复 run_name
             if "run_name" in config_dict:
                 config.run_name = config_dict["run_name"]
 
-            # 基于旧的 run_name 重新计算路径
-            # 注意：如果 json 里有 base_ckpt_dir 且换了机器，这里依然会使用 json 里的路径。
-            # 如果需要适配新机器路径，可以在调用 read_json 前修改 config_dict 或手动指定 base_ckpt_dir
             config.ckpt_dir = os.path.join(config.base_ckpt_dir, config.run_name)
             config.log_dir = os.path.join(config.ckpt_dir, "logs")
             config.save_path = os.path.join(config.ckpt_dir, "best_model.pth")
