@@ -7,20 +7,18 @@ class HumanLikeMultimodalModel(nn.Module):
     def __init__(self, vision_model, audio_model, shared_dim=512, num_classes=2):
         super().__init__()
 
-        self.vision_encoder = vision_model.resnet  # 提取 ResNet 主干
-        self.vision_dim = 2048  # ResNet50 最后一层特征维度
+        self.vision_encoder = vision_model.resnet
+        self.vision_dim = 2048
 
         for param in self.vision_encoder.parameters():
             param.requires_grad = False
 
-        # 2. 音频编码器 (Wav2Vec2)
-        self.audio_encoder = audio_model.wav2vec2  # 提取 Wav2Vec2 主干
-        self.audio_dim = 768  # Wav2Vec2 Base 特征维度
+        self.audio_encoder = audio_model.wav2vec2
+        self.audio_dim = 768
 
         for param in self.audio_encoder.parameters():
             param.requires_grad = False
 
-        # 3. 投影层 (Projection Heads) -> 映射到相同长度 tokens
         self.vision_proj = nn.Linear(self.vision_dim, shared_dim)
         self.audio_proj = nn.Linear(self.audio_dim, shared_dim)
 
@@ -32,19 +30,12 @@ class HumanLikeMultimodalModel(nn.Module):
         )
 
     def forward(self, pixel_values, input_values, labels=None):
-        # --- 1. 视觉通路 ---
-        # ResNet 输出: (batch, 2048, 7, 7) -> pool -> (batch, 2048, 1, 1)
         v_out = self.vision_encoder(pixel_values)
-        # 获取 pooled output (batch, 2048)
         v_feat = v_out.pooler_output.flatten(1)
 
-        # --- 2. 听觉通路 ---
-        # Wav2Vec2 输出: (batch, seq_len, 768)
         a_out = self.audio_encoder(input_values)
-        # 我们取平均池化 (Mean Pooling) 得到全局特征 (batch, 768)
         a_feat = torch.mean(a_out.last_hidden_state, dim=1)
 
-        # --- 3. 投影对齐 (Encoding to same length) ---
         v_emb = self.vision_proj(v_feat)  # (batch, 512)
         a_emb = self.audio_proj(a_feat)  # (batch, 512)
 
@@ -61,16 +52,12 @@ class HumanLikeMultimodalModel(nn.Module):
         #     target = torch.ones(v_emb.size(0)).to(v_emb.device)
         #     loss_contrastive = F.cosine_embedding_loss(v_emb, a_emb, target)
 
-        # --- 5. 融合与决策 ---
         combined_feat = torch.cat((v_emb, a_emb), dim=1)  # (batch, 1024)
         logits = self.classifier(combined_feat)
 
         loss = None
         if labels is not None:
             loss_cls = F.cross_entropy(logits, labels)
-            # 总损失 = 分类损失 + lambda * 对比损失
-            # lambda 系数决定了你多看重"对齐"
-            # loss = loss_cls + 0.5 * loss_contrastive
             loss = loss_cls
 
         # return {"loss": loss, "logits": logits, "contrastive_loss": loss_contrastive}
@@ -110,26 +97,24 @@ class MultimodalModelDrop(nn.Module):
         audio_model,
         shared_dim=512,
         num_classes=2,
-        vision_drop_prob=0.0,  # 新增：整路视觉 drop 概率
-        audio_drop_prob=0.0,  # 新增：整路音频 drop 概率
-        emb_mask_prob=0.0,  # 新增：在 embedding 维度上随机 mask 的概率（可选）
+        vision_drop_prob=0.0,
+        audio_drop_prob=0.0,
+        emb_mask_prob=0.0,
     ):
         super().__init__()
 
-        self.vision_encoder = vision_model.resnet  # 提取 ResNet 主干
-        self.vision_dim = 2048  # ResNet50 最后一层特征维度
+        self.vision_encoder = vision_model.resnet
+        self.vision_dim = 2048
 
         for param in self.vision_encoder.parameters():
             param.requires_grad = False
 
-        # 2. 音频编码器 (Wav2Vec2)
-        self.audio_encoder = audio_model.wav2vec2  # 提取 Wav2Vec2 主干
-        self.audio_dim = 768  # Wav2Vec2 Base 特征维度
+        self.audio_encoder = audio_model.wav2vec2
+        self.audio_dim = 768
 
         for param in self.audio_encoder.parameters():
             param.requires_grad = False
 
-        # 3. 投影层 (Projection Heads) -> 映射到相同长度 tokens
         self.vision_proj = nn.Linear(self.vision_dim, shared_dim)
         self.audio_proj = nn.Linear(self.audio_dim, shared_dim)
 
@@ -140,7 +125,6 @@ class MultimodalModelDrop(nn.Module):
             nn.Linear(256, num_classes),
         )
 
-        # --- 新增：mask 控制参数 ---
         self.vision_drop_prob = vision_drop_prob
         self.audio_drop_prob = audio_drop_prob
         self.emb_mask_prob = emb_mask_prob
@@ -153,12 +137,10 @@ class MultimodalModelDrop(nn.Module):
         bsz = v_emb.size(0)
         device = v_emb.device
 
-        # 对每个样本，独立决定是否 drop vision / audio
         if self.vision_drop_prob > 0.0:
             vision_keep_mask = (
                 torch.rand(bsz, 1, device=device) > self.vision_drop_prob
             ).float()
-            # 保留的样本乘 1，被 drop 的样本乘 0
             v_emb = v_emb * vision_keep_mask
         if self.audio_drop_prob > 0.0:
             audio_keep_mask = (
@@ -175,37 +157,29 @@ class MultimodalModelDrop(nn.Module):
         """
         if self.emb_mask_prob <= 0.0 or not self.training:
             return emb
-        # dropout 的标准实现也可以：nn.Dropout(p=self.emb_mask_prob)(emb)
-        # 这里演示按维度生成 mask
+
         mask = (torch.rand_like(emb, device=emb.device) > self.emb_mask_prob).float()
         return emb * mask
 
     def forward(self, pixel_values, input_values, labels=None):
-        # --- 1. 视觉通路 ---
-        # ResNet 输出: (batch, 2048, 7, 7) -> pool -> (batch, 2048, 1, 1)
+        #  (batch, 2048, 7, 7) -> pool -> (batch, 2048, 1, 1)
         v_out = self.vision_encoder(pixel_values)
-        # 获取 pooled output (batch, 2048)
+        #  pooled output (batch, 2048)
         v_feat = v_out.pooler_output.flatten(1)
 
-        # --- 2. 听觉通路 ---
-        # Wav2Vec2 输出: (batch, seq_len, 768)
+        # (batch, seq_len, 768)
         a_out = self.audio_encoder(input_values)
-        # 我们取平均池化 (Mean Pooling) 得到全局特征 (batch, 768)
+        # Mean Pooling) (batch, 768)
         a_feat = torch.mean(a_out.last_hidden_state, dim=1)
 
-        # --- 3. 投影对齐 (Encoding to same length) ---
         v_emb = self.vision_proj(v_feat)  # (batch, shared_dim)
         a_emb = self.audio_proj(a_feat)  # (batch, shared_dim)
 
-        # --- 4. 训练时随机 mask ---
         if self.training:
-            # 4.1 随机整路 drop vision / audio
             v_emb, a_emb = self._apply_random_route_drop(v_emb, a_emb)
-            # 4.2 在 embedding 内部再做一点逐维 mask（可选）
             v_emb = self._apply_random_emb_mask(v_emb)
             a_emb = self._apply_random_emb_mask(a_emb)
 
-        # --- 5. 融合与决策 ---
         combined_feat = torch.cat((v_emb, a_emb), dim=1)  # (batch, 2 * shared_dim)
         logits = self.classifier(combined_feat)
 
@@ -215,8 +189,8 @@ class MultimodalModelDrop(nn.Module):
             loss = loss_cls
 
         return {"loss": loss, "logits": logits}
-    
-    
+
+
 class MultiModalAttnModel(nn.Module):
     def __init__(
         self,
@@ -224,15 +198,14 @@ class MultiModalAttnModel(nn.Module):
         audio_model,
         shared_dim=512,
         num_classes=2,
-        attn_heads=8,  # 注意力头数
-        attn_dropout=0.2,  # 注意力权重 dropout
-        linear_dropout=0.2,  # 全连接层 dropout
-        vision_drop_prob=0.0,  # 整路视觉 drop 概率
-        audio_drop_prob=0.0,  # 整路音频 drop 概
+        attn_heads=8,
+        attn_dropout=0.2,
+        linear_dropout=0.2,
+        vision_drop_prob=0.0,
+        audio_drop_prob=0.0,
     ):
         super().__init__()
 
-        # --- 1. 编码器和投影层 (与之前模型相同) ---
         self.vision_encoder = vision_model.resnet
         self.vision_dim = 2048
         for param in self.vision_encoder.parameters():
@@ -245,11 +218,10 @@ class MultiModalAttnModel(nn.Module):
 
         self.vision_proj = nn.Linear(self.vision_dim, shared_dim)
         self.audio_proj = nn.Linear(self.audio_dim, shared_dim)
-        
+
         self.vision_drop_prob = vision_drop_prob
         self.audio_drop_prob = audio_drop_prob
 
-        # --- 2. 多模态融合层 (使用自注意力) ---
         # 我们将 v_emb 和 a_emb 看作一个长度为 2 的序列
         self.fusion_attention = nn.MultiheadAttention(
             embed_dim=shared_dim,
@@ -257,10 +229,8 @@ class MultiModalAttnModel(nn.Module):
             dropout=attn_dropout,
             batch_first=True,  # 输入形状为 (batch, seq_len, dim)
         )
-        # LayerNorm 通常与 Attention 配合使用，增加稳定性
         self.fusion_norm = nn.LayerNorm(shared_dim)
 
-        # --- 3. 分类器 ---
         # 注意力融合后，我们仍然得到两个模态的特征，将它们拼接
         # self.classifier = nn.Sequential(
         #     nn.Linear(shared_dim * 2, 256),
@@ -269,44 +239,38 @@ class MultiModalAttnModel(nn.Module):
         #     nn.Linear(256, num_classes),
         # )
         self.classifier = nn.Linear(shared_dim * 2, num_classes)
-        
+
     def _create_key_padding_mask(self, bsz, device):
         """
         根据概率为批次中的每个样本生成 key_padding_mask。
         只在 self.training=True 时调用。
         """
-        # mask 形状为 (batch_size, seq_len)，在我们的例子中是 (bsz, 2)
         # True 表示该位置的 key 会被忽略
         mask = torch.zeros(bsz, 2, dtype=torch.bool, device=device)
 
         if self.vision_drop_prob > 0.0:
             # 为每个样本生成一个随机数，如果小于 drop 概率，则屏蔽视觉模态
             vision_drop_indices = torch.rand(bsz, device=device) < self.vision_drop_prob
-            mask[vision_drop_indices, 0] = True 
+            mask[vision_drop_indices, 0] = True
 
         if self.audio_drop_prob > 0.0:
             # 屏蔽听觉模态
             audio_drop_indices = torch.rand(bsz, device=device) < self.audio_drop_prob
-            mask[audio_drop_indices, 1] = True 
+            mask[audio_drop_indices, 1] = True
 
-        # --- 防止一个样本的两个模态都被屏蔽 ---
-        # 1. 找到哪些样本的两个模态都被屏蔽了
         all_masked_indices = mask.all(dim=1)
-        
-        # 2. 如果存在这样的样本
+
         if all_masked_indices.any():
-            # 3. 为这些被双重屏蔽的样本，生成一个随机的索引（0或1）来恢复
-            # torch.randint(0, 2, ...) 会生成 0 或 1 的随机整数
+
             num_all_masked = all_masked_indices.sum()
             indices_to_unmask = torch.randint(0, 2, (num_all_masked,), device=device)
-            
-            # 4. 将这些样本的对应随机索引位置的 mask 设置为 False
+
+            # 将这些样本的对应随机索引位置的 mask 设置为 False
             mask[all_masked_indices, indices_to_unmask] = False
 
         return mask
 
     def forward(self, pixel_values, input_values, labels=None):
-        # --- 1. 特征提取与投影 ---
         v_out = self.vision_encoder(pixel_values)
         v_feat = v_out.pooler_output.flatten(1)
         v_emb = self.vision_proj(v_feat)  # (batch, shared_dim)
@@ -315,32 +279,29 @@ class MultiModalAttnModel(nn.Module):
         a_feat = torch.mean(a_out.last_hidden_state, dim=1)
         a_emb = self.audio_proj(a_feat)  # (batch, shared_dim)
 
-        # --- 2. 自注意力融合 ---
         # 将 v_emb 和 a_emb 视为一个序列，长度为 2
         # v_emb: (batch, shared_dim) -> (batch, 1, shared_dim)
         # a_emb: (batch, shared_dim) -> (batch, 1, shared_dim)
         # multi_modal_seq: (batch, 2, shared_dim)
         multi_modal_seq = torch.stack([v_emb, a_emb], dim=1)
-        
-        # --- 创建 key_padding_mask ---
+
         key_padding_mask = None
         if self.training and (self.vision_drop_prob > 0 or self.audio_drop_prob > 0):
             bsz, _, _ = multi_modal_seq.shape
-            key_padding_mask = self._create_key_padding_mask(bsz, multi_modal_seq.device)
+            key_padding_mask = self._create_key_padding_mask(
+                bsz, multi_modal_seq.device
+            )
 
-        # 自注意力计算
         # attn_output: (batch, 2, shared_dim)
         attn_output, _ = self.fusion_attention(
             query=multi_modal_seq,
             key=multi_modal_seq,
             value=multi_modal_seq,
-            key_padding_mask=key_padding_mask # 训练时随机 mask 掉某个模态
+            key_padding_mask=key_padding_mask,
         )
-        
-        # 残差连接和层归一化
+
         fused_seq = self.fusion_norm(multi_modal_seq + attn_output)
 
-        # --- 3. 融合与决策 ---
         # fused_seq[:, 0, :] 是融合后的视觉特征
         # fused_seq[:, 1, :] 是融合后的听觉特征
         combined_feat = fused_seq.flatten(start_dim=1)  # (batch, 2 * shared_dim)
@@ -351,6 +312,7 @@ class MultiModalAttnModel(nn.Module):
             loss = F.cross_entropy(logits, labels)
 
         return {"loss": loss, "logits": logits}
+
 
 class MultiModalAttnCLSModel(nn.Module):
     def __init__(
@@ -383,10 +345,8 @@ class MultiModalAttnCLSModel(nn.Module):
         self.vision_drop_prob = vision_drop_prob
         self.audio_drop_prob = audio_drop_prob
 
-        # --- 2. 可学习的 [CLS] Token ---
         self.cls_token = nn.Parameter(torch.zeros(1, 1, shared_dim))
 
-        # --- 3. 多模态融合层 (自注意力) ---
         self.fusion_attention = nn.MultiheadAttention(
             embed_dim=shared_dim,
             num_heads=attn_heads,
@@ -395,7 +355,6 @@ class MultiModalAttnCLSModel(nn.Module):
         )
         self.fusion_norm = nn.LayerNorm(shared_dim)
 
-        # --- 4. 分类器 (基于 [CLS] Token) ---
         self.classifier = nn.Linear(shared_dim, num_classes)
 
     def _create_key_padding_mask(self, bsz, device):
@@ -403,29 +362,25 @@ class MultiModalAttnCLSModel(nn.Module):
         为 [CLS, vision, audio] 序列生成 key_padding_mask。
         只在 self.training=True 时调用。
         """
-        # mask 形状为 (bsz, 3)，True 表示忽略该 key
         mask = torch.zeros(bsz, 3, dtype=torch.bool, device=device)
 
         if self.vision_drop_prob > 0.0:
             vision_drop_indices = torch.rand(bsz, device=device) < self.vision_drop_prob
-            mask[vision_drop_indices, 1] = True  # 序列中第1个是视觉
+            mask[vision_drop_indices, 1] = True
 
         if self.audio_drop_prob > 0.0:
             audio_drop_indices = torch.rand(bsz, device=device) < self.audio_drop_prob
-            mask[audio_drop_indices, 2] = True  # 序列中第2个是听觉
+            mask[audio_drop_indices, 2] = True
 
-        # 防止视觉和听觉都被屏蔽 (CLS Token 不参与此逻辑)
         all_masked_indices = mask[:, 1:].all(dim=1)
         if all_masked_indices.any():
             num_all_masked = all_masked_indices.sum()
-            # 随机恢复 1 (vision) 或 2 (audio)
             indices_to_unmask = torch.randint(1, 3, (num_all_masked,), device=device)
             mask[all_masked_indices, indices_to_unmask] = False
 
         return mask
 
     def forward(self, pixel_values, input_values, labels=None):
-        # --- 1. 特征提取与投影 ---
         v_out = self.vision_encoder(pixel_values)
         v_feat = v_out.pooler_output.flatten(1)
         v_emb = self.vision_proj(v_feat)
@@ -434,20 +389,19 @@ class MultiModalAttnCLSModel(nn.Module):
         a_feat = torch.mean(a_out.last_hidden_state, dim=1)
         a_emb = self.audio_proj(a_feat)
 
-        # --- 2. 自注意力融合 ---
-        # 2.1 准备序列，加入 [CLS] Token
         bsz = v_emb.shape[0]
         cls_tokens = self.cls_token.expand(bsz, -1, -1)
-        
-        # 序列变为: [CLS, Vision, Audio]
-        multi_modal_seq = torch.cat((cls_tokens, v_emb.unsqueeze(1), a_emb.unsqueeze(1)), dim=1)
 
-        # 2.2 创建 key_padding_mask
+        multi_modal_seq = torch.cat(
+            (cls_tokens, v_emb.unsqueeze(1), a_emb.unsqueeze(1)), dim=1
+        )
+
         key_padding_mask = None
         if self.training and (self.vision_drop_prob > 0 or self.audio_drop_prob > 0):
-            key_padding_mask = self._create_key_padding_mask(bsz, multi_modal_seq.device)
+            key_padding_mask = self._create_key_padding_mask(
+                bsz, multi_modal_seq.device
+            )
 
-        # 2.3 自注意力计算
         attn_output, _ = self.fusion_attention(
             query=multi_modal_seq,
             key=multi_modal_seq,
@@ -455,11 +409,8 @@ class MultiModalAttnCLSModel(nn.Module):
             key_padding_mask=key_padding_mask,
         )
 
-        # 2.4 残差连接和层归一化
         fused_seq = self.fusion_norm(multi_modal_seq + attn_output)
 
-        # --- 3. 决策 ---
-        # 只取出 [CLS] Token 对应的输出 (序列的第一个)
         cls_output = fused_seq[:, 0, :]
         logits = self.classifier(cls_output)
 

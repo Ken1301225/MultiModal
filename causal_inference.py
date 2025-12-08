@@ -14,7 +14,6 @@ from transformers import (
     AutoImageProcessor,
 )
 
-# 复用现有模块
 from config import Config
 from model import (
     HumanLikeMultimodalModel,
@@ -43,15 +42,12 @@ def run_causal_inference(model, dataloader, device):
         for batch in tqdm(dataloader, desc="Inference"):
             pixel_values = batch["pixel_values"].to(device)
             input_values = batch["input_values"].to(device)
-            conditions = batch["condition"]  # list of strings
-
+            conditions = batch["condition"]
             outputs = model(pixel_values, input_values)
             logits = outputs["logits"]
 
-            # 计算概率分布 (Softmax)
             probs = torch.softmax(logits, dim=-1)
 
-            # 遍历 batch 中的每个样本
             for i in range(len(conditions)):
                 # 获取 "Dog" (index 1) 的概率
                 p_dog = probs[i, 1].item()
@@ -71,14 +67,11 @@ def plot_causal_results(df, save_dir):
     """
     绘制条形图展示不同条件下的决策倾向和不确定性。
     """
-    # 设置绘图风格
     sns.set_theme(style="whitegrid", context="talk")
     plt.figure(figsize=(16, 7))
 
-    # 定义条件顺序，方便对比
     order = ["Congruent_Cat", "Congruent_Dog", "Conflict_V_Cat", "Conflict_V_Dog"]
 
-    # --- 子图 1: 决策概率 P(Dog) ---
     plt.subplot(1, 2, 1)
     sns.barplot(
         data=df,
@@ -95,7 +88,6 @@ def plot_causal_results(df, save_dir):
     plt.axhline(0.5, color="r", linestyle="--", alpha=0.5, label="Chance Level")
     plt.xticks(rotation=25)
 
-    # --- 子图 2: 不确定性 (Entropy) ---
     plt.subplot(1, 2, 2)
     sns.barplot(
         data=df,
@@ -120,7 +112,6 @@ def plot_causal_results(df, save_dir):
     mean_vals = df.groupby("Condition")[["P(Dog)", "Entropy"]].mean()
     print(mean_vals)
 
-    # 计算视觉偏好指数 (Visual Bias Index)
     # Conflict_V_Dog (视狗听猫) -> 应该倾向于 1 (Dog)
     # Conflict_V_Cat (视猫听狗) -> 应该倾向于 0 (Cat)
     if "Conflict_V_Dog" in mean_vals.index and "Conflict_V_Cat" in mean_vals.index:
@@ -144,14 +135,11 @@ def plot_causal_results(df, save_dir):
 
 
 def main():
-    # 1. 配置路径 (请根据需要修改 json_path)
     json_path = "/home/amax/dakai/neuron/checkpoints/Drop_lr1e-04_bs16_mask0.7_v0.5_a0.5_1204_0954/config.json"
 
-    # 纯净数据路径 (用于构建冲突样本)
     img_cache_dir = "/home/amax/dakai/dataset/microsoft"
     audio_data_dir = "/home/amax/dakai/dataset/dc_w/DvC"
 
-    # 2. 加载配置
     if not os.path.exists(json_path):
         print(f"错误: 找不到配置文件 {json_path}")
         return
@@ -161,17 +149,13 @@ def main():
     print(f"使用设备: {device}")
     print(f"模型类型: {cfg.model_type}")
 
-    # 3. 准备数据处理工具
-    # 图像
     _, val_transforms = get_transforms()
 
-    # 音频
     audio_model_cache = "/home/amax/dakai/neuron/model/facebook/models--facebook--wav2vec2-base/snapshots/0b5b8e868dd84f03fd87d01f9c4ff0f080fecfe8"
     feature_extractor = AutoFeatureExtractor.from_pretrained(
         audio_model_cache, use_fast=True
     )
 
-    # 4. 初始化因果冲突数据集
     causal_ds = CausalConflictDataset(
         image_data_dir=img_cache_dir,
         audio_data_dir=audio_data_dir,
@@ -183,7 +167,6 @@ def main():
 
     dataloader = DataLoader(causal_ds, batch_size=32, shuffle=False, num_workers=4)
 
-    # 5. 加载模型
     print("正在加载模型...")
     img_model_best = AutoModelForImageClassification.from_pretrained(cfg.img_model_path)
     audio_model_best = AutoModelForAudioClassification.from_pretrained(
@@ -243,10 +226,8 @@ def main():
     model.eval()
     print("模型加载成功！")
 
-    # 6. 运行实验
     df_results = run_causal_inference(model, dataloader, device)
 
-    # 7. 绘图与保存
     plot_causal_results(df_results, cfg.ckpt_dir)
 
 

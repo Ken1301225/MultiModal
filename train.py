@@ -145,7 +145,6 @@ print(f"标签列名: {label_col}")
 print(f"标签映射: {label2id}")
 
 
-# ================= 保存超参数 =================
 mp = cfg.model_params
 
 match cfg.model_type:
@@ -209,7 +208,6 @@ best_val_loss = np.inf
 # print_trainable_parameters(multimodal_model)
 
 for epoch in range(cfg.epochs):
-    # ================= 训练阶段 =================
     multimodal_model.train()
     total_train_loss = 0
 
@@ -229,7 +227,6 @@ for epoch in range(cfg.epochs):
         optimizer.step()
 
         total_train_loss += loss.item()
-        # 更新进度条上的 loss 显示
         progress_bar.set_postfix({"loss": loss.item()})
 
         global_step = epoch * len(train_loader) + step
@@ -238,7 +235,6 @@ for epoch in range(cfg.epochs):
 
     avg_train_loss = total_train_loss / len(train_loader)
 
-    # ================= 验证阶段 =================
     multimodal_model.eval()
     total_val_loss = 0
     correct_predictions = 0
@@ -256,7 +252,6 @@ for epoch in range(cfg.epochs):
 
             total_val_loss += loss.item()
 
-            # 计算准确率
             preds = torch.argmax(logits, dim=-1)
             correct_predictions += (preds == labels).sum().item()
             total_samples += labels.size(0)
@@ -272,7 +267,6 @@ for epoch in range(cfg.epochs):
         f"Val Acc: {val_acc:.4f}"
     )
 
-    # ================= 保存最佳模型 =================
     if avg_val_loss < best_val_loss:
         best_val_loss = avg_val_loss
         torch.save(multimodal_model.state_dict(), cfg.save_path)

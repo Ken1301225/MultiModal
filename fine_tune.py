@@ -63,11 +63,9 @@ cache_dir = "/home/amax/dakai/neuron/model/restnet50"
 img_cache_checkpoint = "/home/amax/.cache/huggingface/hub/models--microsoft--resnet-50/snapshots/34c2154c194f829b11125337b98c8f5f9965ff19"
 image_processor = AutoImageProcessor.from_pretrained(img_cache_checkpoint)
 
-# 2. 定义转换函数
-# 图像均值和方差来自 ImageNet
+
 normalize = Normalize(mean=image_processor.image_mean, std=image_processor.image_std)
 
-# 训练集转换 (包含数据增强)
 _train_transforms = Compose(
     [
         Resize((256, 256)),
@@ -78,7 +76,6 @@ _train_transforms = Compose(
     ]
 )
 
-# 验证集转换 (仅调整大小和归一化)
 _val_transforms = Compose(
     [
         Resize((256, 256)),
@@ -117,10 +114,10 @@ print(f"标签映射: {label2id}")
 
 
 img_model = AutoModelForImageClassification.from_pretrained(
-    img_cache_checkpoint,  # "microsoft/resnet-50"
+    img_cache_checkpoint,
     label2id=label2id,
     id2label=id2label,
-    ignore_mismatched_sizes=True,  # 忽略输出层大小不匹配 (从 ImageNet 1000类 -> 2类)
+    ignore_mismatched_sizes=True,
 )
 
 accuracy = evaluate.load("accuracy")
@@ -132,21 +129,19 @@ def compute_metrics(eval_pred):
     return accuracy.compute(predictions=predictions, references=labels)
 
 
-# ============ 6. 数据整理器 (Data Collator) ============
 def collate_fn(examples):
     pixel_values = torch.stack([example["pixel_values"] for example in examples])
     labels = torch.tensor([example[label_col] for example in examples])
     return {"pixel_values": pixel_values, "labels": labels}
 
 
-# ============ 7. 配置训练参数 ============
 training_args = TrainingArguments(
     output_dir="./resnet-cats-dogs3",
-    remove_unused_columns=False,  # ⚠️ 关键！必须设为 False，否则 'image' 列会被删除导致 transform 失败
-    eval_strategy="epoch",  # 每个 epoch 评估一次
-    save_strategy="epoch",  # 每个 epoch 保存一次
+    remove_unused_columns=False,
+    eval_strategy="epoch",
+    save_strategy="epoch",
     learning_rate=5e-4,
-    per_device_train_batch_size=16,  # 如果显存不够，改小这个数字 (如 16)
+    per_device_train_batch_size=16,
     per_device_eval_batch_size=16,
     num_train_epochs=10,
     warmup_ratio=0.1,
@@ -154,11 +149,10 @@ training_args = TrainingArguments(
     save_total_limit=3,
     load_best_model_at_end=True,
     metric_for_best_model="accuracy",
-    logging_dir="/home/amax/dakai/neuron/logs/finetune2",  # TensorBoard 日志存放路径
+    logging_dir="/home/amax/dakai/neuron/logs/finetune2",
     report_to=["tensorboard"],
 )
 
-# ============ 8. 开始训练 ============
 trainer = Trainer(
     model=img_model,
     args=training_args,
